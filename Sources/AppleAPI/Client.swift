@@ -63,16 +63,51 @@ public class Client {
                 else { throw Error.invalidSession }
             }
     }
-    
+
+    public enum TwoFactorAuthentication: Identifiable {
+
+        public struct Phone {
+            public let id: Int
+            public let number: String
+        }
+
+        case codeFromDevice(codeLength: Int)
+        case codeFromSms(codeLength: Int, phone: Phone)
+        case trustedPhone(phones: [Phone])
+
+        public var id: String {
+            switch self {
+                case .codeFromDevice(codeLength: let codeLength):
+                return "code-from-device-\(codeLength)"
+            case .codeFromSms(codeLength: let codeLength, phone: let phone):
+                return "code-from-sms-\(codeLength)-\(phone.id)"
+            case .trustedPhone(phones: let phones):
+                return "trusted-phone-\(phones.map { String($0.id) }.joined(separator: "-"))"
+            }
+        }
+    }
+
+    public enum TwoFactorAuthenticationResult {
+        case code(SecurityCode)
+        case sms
+        case selectTrustedPhone(phoneId: Int)
+    }
+
+    public typealias TwoFactorAuthenticationCallback = (_ twoFactorAuthentication: TwoFactorAuthentication) -> Promise<TwoFactorAuthenticationResult>
+
     /// SRPLogin - Secure Remote Password
     /// https://tools.ietf.org/html/rfc2945
     /// Forked from https://github.com/adam-fowler/swift-srp that provides the algorithm
-    public func srpLogin(accountName: String, password: String) -> Promise<Void> {
+    public func srpLogin(
+        accountName: String,
+        password: String,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<Void> {
         var serviceKey: String!
         let client = SRPClient(configuration: SRPConfiguration<SHA256>(.N2048))
         let clientKeys = client.generateKeys()
         let a = clientKeys.public
-        
+
         // Get the Service Key needed from olympus session needed in headers
         return firstly { () -> Promise<(data: Data, response: URLResponse)> in
             Current.network.dataTask(with: URLRequest.itcServiceKey)
@@ -144,7 +179,12 @@ public class Client {
                 case 401:
                     throw Error.invalidUsernameOrPassword(username: accountName)
                 case 409:
-                    return self.handleTwoStepOrFactor(data: data, response: response, serviceKey: serviceKey)
+                    return self.handleTwoStepOrFactor(
+                        data: data,
+                        response: response,
+                        serviceKey: serviceKey,
+                        twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                    )
                 case 412 where Client.authTypes.contains(responseBody.authType ?? ""):
                     throw Error.appleIDAndPrivacyAcknowledgementRequired
                 default:
@@ -160,7 +200,7 @@ public class Client {
     }
     
     @available(*, deprecated, message: "Please use srpLogin")
-    public func login(accountName: String, password: String) -> Promise<Void> {
+    public func login(accountName: String, password: String, twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?) -> Promise<Void> {
         var serviceKey: String!
         
         return firstly { () -> Promise<(data: Data, response: URLResponse)> in
@@ -204,12 +244,19 @@ public class Client {
                 case 401:
                     throw Error.invalidUsernameOrPassword(username: accountName)
                 case 409:
-                    return self.handleTwoStepOrFactor(data: data, response: response, serviceKey: serviceKey)
+                    return self.handleTwoStepOrFactor(
+                        data: data,
+                        response: response,
+                        serviceKey: serviceKey,
+                        twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                    )
                 case 412 where Client.authTypes.contains(responseBody.authType ?? ""):
                     throw Error.appleIDAndPrivacyAcknowledgementRequired
                 default:
-                    throw Error.unexpectedSignInResponse(statusCode: httpResponse.statusCode,
-                                                         message: responseBody.serviceErrors?.map { $0.description }.joined(separator: ", "))
+                    throw Error.unexpectedSignInResponse(
+                        statusCode: httpResponse.statusCode,
+                        message: responseBody.serviceErrors?.map { $0.description }.joined(separator: ", ")
+                    )
                 }
             } catch DecodingError.dataCorrupted where httpResponse.statusCode == 503 {
                 throw Error.serviceTemporarilyUnavailable
@@ -219,14 +266,22 @@ public class Client {
         }
     }
     
-    func handleTwoStepOrFactor(data: Data, response: URLResponse, serviceKey: String) -> Promise<Void> {
+    func handleTwoStepOrFactor(
+        data: Data,
+        response: URLResponse,
+        serviceKey: String,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<Void> {
         let httpResponse = response as! HTTPURLResponse
         let sessionID = (httpResponse.allHeaderFields["X-Apple-ID-Session-Id"] as! String)
         let scnt = (httpResponse.allHeaderFields["scnt"] as! String)
         
         return firstly { () -> Promise<AuthOptionsResponse> in
-            return Current.network.dataTask(with: URLRequest.authOptions(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt))
-                .map { try JSONDecoder().decode(AuthOptionsResponse.self, from: $0.data) }
+            return Current.network.dataTask(
+                with: URLRequest.authOptions(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt)
+            ).map {
+                try JSONDecoder().decode(AuthOptionsResponse.self, from: $0.data)
+            }
         }
         .then { authOptions -> Promise<Void> in
             switch authOptions.kind {
@@ -234,7 +289,13 @@ public class Client {
                 Current.logging.log("Received a response from Apple that indicates this account has two-step authentication enabled. xcodes currently only supports the newer two-factor authentication, though. Please consider upgrading to two-factor authentication, or open an issue on GitHub explaining why this isn't an option for you here: https://github.com/RobotsAndPencils/xcodes/issues/new".yellow)
                 return Promise.value(())
             case .twoFactor:
-                return self.handleTwoFactor(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, authOptions: authOptions)
+                return self.handleTwoFactor(
+                    serviceKey: serviceKey,
+                    sessionID: sessionID,
+                    scnt: scnt,
+                    authOptions: authOptions,
+                    twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                )
             case .hardwareKey:
                 throw Error.accountUsesHardwareKey
             case .unknown:
@@ -244,44 +305,117 @@ public class Client {
             }
         }
     }
-    
-    func handleTwoFactor(serviceKey: String, sessionID: String, scnt: String, authOptions: AuthOptionsResponse) -> Promise<Void> {
+
+    private func requestSecurityCode(
+        length: Int,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<TwoFactorAuthenticationResult> {
+
+        // 1️⃣ Внешний UI подключён → доверяем ему
+        if let callback = twoFactorAuthenticationCallback {
+            return callback(.codeFromDevice(codeLength: length))
+        }
+
+        // 2️⃣ Fallback: классический CLI-режим
+        return Promise { seal in
+            let input = Current.shell.readLine("""
+            Enter "sms" without quotes to exit this prompt and choose a phone number to send an SMS security code to.
+            Enter the \(length) digit code from one of your trusted devices: 
+            """) ?? ""
+
+            if input.lowercased() == "sms" {
+                seal.fulfill(.sms)
+            } else {
+                seal.fulfill(.code(.device(code: input)))
+            }
+        }
+    }
+
+    func handleTwoFactor(
+        serviceKey: String,
+        sessionID: String,
+        scnt: String,
+        authOptions: AuthOptionsResponse,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<Void> {
         Current.logging.log("Two-factor authentication is enabled for this account.\n")
         
         // SMS was sent automatically 
         if authOptions.smsAutomaticallySent {
-            return firstly { () throws -> Promise<(data: Data, response: URLResponse)> in
+            return firstly { () throws -> Promise<SecurityCode> in
                 guard let securityCode = authOptions.securityCode else { throw Error.missingSecurityCodeInfo }
-                let code = self.promptForSMSSecurityCode(length: securityCode.length, for: authOptions.trustedPhoneNumbers!.first!)
-                return Current.network.dataTask(with: try URLRequest.submitSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, code: code))
-                    .validateSecurityCodeResponse()
+                return self.promptForSMSSecurityCode(
+                    length: securityCode.length,
+                    for: authOptions.trustedPhoneNumbers!.first!,
+                    twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                )
+            }
+            .then { code -> Promise<(data: Data, response: URLResponse)> in
+                return Current.network.dataTask(
+                    with: try URLRequest.submitSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, code: code)
+                )
+                .validateSecurityCodeResponse()
             }
             .then { (data, response) -> Promise<Void>  in
                 self.updateSession(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt)
             }
             // SMS wasn't sent automatically because user needs to choose a phone to send to
         } else if authOptions.canFallBackToSMS {
-            return handleWithPhoneNumberSelection(authOptions: authOptions, serviceKey: serviceKey, sessionID: sessionID, scnt: scnt)
+            return handleWithPhoneNumberSelection(
+                authOptions: authOptions,
+                serviceKey: serviceKey,
+                sessionID: sessionID,
+                scnt: scnt,
+                twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+            )
             // Code is shown on trusted devices
         } else {
             let securityCodeLength: Int = authOptions.securityCode?.length ?? 0
-            let code = Current.shell.readLine("""
-            Enter "sms" without quotes to exit this prompt and choose a phone number to send an SMS security code to.
-            Enter the \(securityCodeLength) digit code from one of your trusted devices: 
-            """) ?? ""
-            
-            if code == "sms" {
-                return handleWithPhoneNumberSelection(authOptions: authOptions, serviceKey: serviceKey, sessionID: sessionID, scnt: scnt)
-            }
-            
+
             return firstly {
-                Current.network.dataTask(with: try URLRequest.submitSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, code: .device(code: code)))
-                    .validateSecurityCodeResponse()
-                
-            }
-            .then { (data, response) -> Promise<Void>  in
-                self.updateSession(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt)
-            }
+                requestSecurityCode(
+                    length: securityCodeLength,
+                    twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                )
+            }.then { result -> Promise<(data: Data, response: URLResponse)> in
+                        switch result {
+                        case .code(let code):
+                            switch code {
+                            case .device(let code):
+                                return Current.network.dataTask(
+                                    with: try URLRequest.submitSecurityCode(
+                                        serviceKey: serviceKey,
+                                        sessionID: sessionID,
+                                        scnt: scnt,
+                                        code: .device(code: code)
+                                    )
+                                )
+                                .validateSecurityCodeResponse()
+                            case .sms:
+                                fatalError("Should never happen: SMS code requested via `requestSecurityCode`")
+                            }
+                        case .sms:
+                            return self.handleWithPhoneNumberSelection(
+                                authOptions: authOptions,
+                                serviceKey: serviceKey,
+                                sessionID: sessionID,
+                                scnt: scnt,
+                                twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+                            )
+                            .asVoid()
+                            .map { (Data(), URLResponse()) }
+                        case .selectTrustedPhone:
+                            fatalError(
+                                "Should never happen: User was prompted to select a phone number to send an SMS security code to"
+                            )
+                        }
+                    }.then { _ in
+                        self.updateSession(
+                            serviceKey: serviceKey,
+                            sessionID: sessionID,
+                            scnt: scnt
+                        )
+                    }
         }
     }
     
@@ -292,37 +426,95 @@ public class Client {
             }
     }
     
-    func selectPhoneNumberInteractively(from trustedPhoneNumbers: [AuthOptionsResponse.TrustedPhoneNumber]) -> Promise<AuthOptionsResponse.TrustedPhoneNumber> {
-        return firstly { () throws -> Guarantee<AuthOptionsResponse.TrustedPhoneNumber> in
+    func selectPhoneNumberInteractively(
+        from trustedPhoneNumbers: [AuthOptionsResponse.TrustedPhoneNumber],
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<AuthOptionsResponse.TrustedPhoneNumber> {
+        return firstly { () throws -> Promise<AuthOptionsResponse.TrustedPhoneNumber> in
             Current.logging.log("Trusted phone numbers:")
             trustedPhoneNumbers.enumerated().forEach { (index, phoneNumber) in
                 Current.logging.log("\(index + 1): \(phoneNumber.numberWithDialCode)")
             }
-            
-            let possibleSelectionNumberString = Current.shell.readLine("Select a trusted phone number to receive a code via SMS: ")
-            guard
-                let selectionNumberString = possibleSelectionNumberString,
-                let selectionNumber = Int(selectionNumberString) ,
-                trustedPhoneNumbers.indices.contains(selectionNumber - 1)
-            else {
-                throw Error.invalidPhoneNumberIndex(min: 1, max: trustedPhoneNumbers.count, given: possibleSelectionNumberString)
+
+            if let twoFactorAuthenticationCallback {
+                return twoFactorAuthenticationCallback(.trustedPhone(
+                    phones: trustedPhoneNumbers.map {
+                        .init(id: $0.id, number: $0.numberWithDialCode)
+                    })
+                )
+                .then { c -> Promise<AuthOptionsResponse.TrustedPhoneNumber> in
+                    switch c {
+                    case .selectTrustedPhone(let phoneId):
+                        let number = trustedPhoneNumbers.first { n in
+                            return n.id == phoneId
+                        }
+                        return .value(number!)
+                    case .code, .sms:
+                        fatalError(#function + " should not be called with .code or .sms")
+                    }
+                }
+            } else {
+                let possibleSelectionNumberString = Current.shell.readLine("Select a trusted phone number to receive a code via SMS: ")
+                guard
+                    let selectionNumberString = possibleSelectionNumberString,
+                    let selectionNumber = Int(selectionNumberString) ,
+                    trustedPhoneNumbers.indices.contains(selectionNumber - 1)
+                else {
+                    throw Error.invalidPhoneNumberIndex(min: 1, max: trustedPhoneNumbers.count, given: possibleSelectionNumberString)
+                }
+
+                return .value(trustedPhoneNumbers[selectionNumber - 1])
             }
-            
-            return .value(trustedPhoneNumbers[selectionNumber - 1])
         }
         .recover { error throws -> Promise<AuthOptionsResponse.TrustedPhoneNumber> in
             guard case Error.invalidPhoneNumberIndex = error else { throw error }
             Current.logging.log("\(error.localizedDescription)\n".red)
-            return self.selectPhoneNumberInteractively(from: trustedPhoneNumbers)
+            return self.selectPhoneNumberInteractively(
+                from: trustedPhoneNumbers,
+                twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+            )
         }
     }
     
-    func promptForSMSSecurityCode(length: Int, for trustedPhoneNumber: AuthOptionsResponse.TrustedPhoneNumber) -> SecurityCode {
-        let code = Current.shell.readLine("Enter the \(length) digit code sent to \(trustedPhoneNumber.numberWithDialCode): ") ?? ""
-        return .sms(code: code, phoneNumberId: trustedPhoneNumber.id)
+    func promptForSMSSecurityCode(
+        length: Int,
+        for trustedPhoneNumber: AuthOptionsResponse.TrustedPhoneNumber,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<SecurityCode> {
+
+        if let twoFactorAuthenticationCallback = twoFactorAuthenticationCallback {
+            return twoFactorAuthenticationCallback(
+                .codeFromSms(
+                    codeLength: length,
+                    phone: .init(
+                        id: trustedPhoneNumber.id,
+                        number: trustedPhoneNumber.numberWithDialCode
+                    )
+                )
+            )
+                .map { result in
+                    switch result {
+                    case .code(let code):
+                        return code
+                    case .sms, .selectTrustedPhone:
+                        fatalError("Unexpected .sms, .selectTrustedPhone case")
+                    }
+                }
+
+        } else {
+            let code = Current.shell.readLine("Enter the \(length) digit code sent to \(trustedPhoneNumber.numberWithDialCode): ") ?? ""
+            return .value(.sms(code: code, phoneNumberId: trustedPhoneNumber.id))
+        }
     }
     
-    func handleWithPhoneNumberSelection(authOptions: AuthOptionsResponse, serviceKey: String, sessionID: String, scnt: String) -> Promise<Void> {
+    func handleWithPhoneNumberSelection(
+        authOptions: AuthOptionsResponse,
+        serviceKey: String,
+        sessionID: String,
+        scnt: String,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<Void> {
+        var selectedTrustedPhoneNumber: AuthOptionsResponse.TrustedPhoneNumber?
         return firstly { () throws -> Promise<AuthOptionsResponse.TrustedPhoneNumber> in
             // I don't think this should ever be nil or empty, because 2FA requires at least one trusted phone number,
             // but if it is nil or empty it's better to inform the user so they can try to address it instead of crashing.
@@ -330,14 +522,19 @@ public class Client {
                 throw Error.noTrustedPhoneNumbers
             }
             
-            return selectPhoneNumberInteractively(from: trustedPhoneNumbers)
+            return selectPhoneNumberInteractively(
+                from: trustedPhoneNumbers,
+                twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+            )
         }
-        .then { trustedPhoneNumber in
-            Current.network.dataTask(with: try URLRequest.requestSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, trustedPhoneID: trustedPhoneNumber.id))
-                .map { _ in
-                    guard let securityCodeLength = authOptions.securityCode?.length else { throw Error.missingSecurityCodeInfo }
-                    return self.promptForSMSSecurityCode(length: securityCodeLength, for: trustedPhoneNumber)
-                }
+        .then { trustedPhoneNumber -> Promise<(data: Data, response: URLResponse)> in
+            selectedTrustedPhoneNumber = trustedPhoneNumber
+            return Current.network.dataTask(with: try URLRequest.requestSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, trustedPhoneID: trustedPhoneNumber.id))
+        }
+        .then { _ in
+            guard let securityCodeLength = authOptions.securityCode?.length else { throw Error.missingSecurityCodeInfo }
+            guard let trustedPhoneNumber = selectedTrustedPhoneNumber else { throw Error.noTrustedPhoneNumbers }
+            return self.promptForSMSSecurityCode(length: securityCodeLength, for: trustedPhoneNumber, twoFactorAuthenticationCallback: nil)
         }
         .then { code in
             Current.network.dataTask(with: try URLRequest.submitSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, code: code))
@@ -498,7 +695,7 @@ public struct ServiceError: Decodable, Equatable {
     let message: String
 }
 
-enum SecurityCode {
+public enum SecurityCode {
     case device(code: String)
     case sms(code: String, phoneNumberId: Int)
     
