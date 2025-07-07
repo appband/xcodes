@@ -16,7 +16,21 @@ extension Process {
     }
 
     @discardableResult
+    static func sudo(password: String? = nil, _ executable: DynamicPath, workingDirectory: URL? = nil, _ arguments: String...) -> Promise<ProcessOutput> {
+        var arguments = [executable.string] + arguments
+        if password != nil {
+            arguments.insert("-S", at: 0)
+        }
+        return run(Path.root.usr.bin.sudo.url, workingDirectory: workingDirectory, input: password, arguments)
+    }
+
+    @discardableResult
     static func run(_ executable: Path, workingDirectory: URL? = nil, input: String? = nil, _ arguments: String...) -> Promise<ProcessOutput> {
+        return run(executable.url, workingDirectory: workingDirectory, input: input, arguments)
+    }
+
+    @discardableResult
+    static func run(_ executable: DynamicPath, workingDirectory: URL? = nil, input: String? = nil, _ arguments: String...) -> Promise<ProcessOutput> {
         return run(executable.url, workingDirectory: workingDirectory, input: input, arguments)
     }
 

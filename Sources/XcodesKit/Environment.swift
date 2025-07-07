@@ -23,6 +23,58 @@ public struct Environment {
 
 public var Current = Environment()
 
+extension DynamicPath {
+    var usr: DynamicPath {
+        return DynamicPath(self.join("usr"))
+    }
+
+    var bin: DynamicPath {
+        return DynamicPath(self.join("bin"))
+    }
+
+    var xib: DynamicPath {
+        return DynamicPath(self.join("xib"))
+    }
+
+    var sbin: DynamicPath {
+        return DynamicPath(self.join("sbin"))
+    }
+
+    var spctl: DynamicPath {
+        return DynamicPath(self.join("spctl"))
+    }
+
+    var codesign: DynamicPath {
+        return DynamicPath(self.join("codesign"))
+    }
+
+    var sw_vers: DynamicPath {
+        return DynamicPath(self.join("sw_vers"))
+    }
+
+    var libexec: DynamicPath {
+        return DynamicPath(self.join("libexec"))
+    }
+
+    var PlistBuddy: DynamicPath {
+        return DynamicPath(self.join("PlistBuddy"))
+    }
+
+    var getconf: DynamicPath {
+        return DynamicPath(self.join("getconf"))
+    }
+
+    var DevToolsSecurity: DynamicPath {
+        return DynamicPath(self.join("DevToolsSecurity"))
+    }
+
+    var dseditgroup: DynamicPath {
+        return DynamicPath(self.join("dseditgroup"))
+    }
+
+
+}
+
 public struct Shell {
     public var unxip: (URL) -> Promise<ProcessOutput> = { Process.run(Path.root.usr.bin.xip, workingDirectory: $0.deletingLastPathComponent(), "--expand", "\($0.path)") }
     public var mountDmg: (URL) -> Promise<ProcessOutput> = { Process.run(Path.root.usr.bin.join("hdiutil"), "attach", "-nobrowse", "-plist", $0.path) }
@@ -277,9 +329,11 @@ public struct Files {
     public var contentsOfDirectory: (URL) throws -> [URL] = { try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil, options: []) }
 
     public var installedXcodes: (Path) -> [InstalledXcode] = { directory in
-        return ((try? directory.ls()) ?? [])
+        let ls = directory.ls()
+
+        return ls
             .filter { $0.isAppBundle && $0.infoPlist?.bundleID == "com.apple.dt.Xcode" }
-            .map { $0.path }
+            .compactMap { try? $0.realpath() }
             .compactMap(InstalledXcode.init)
     }
 }

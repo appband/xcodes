@@ -3,7 +3,18 @@ import Foundation
 
 extension Path {
     // Get Home even if we are running as root
-    static let environmentHome = ProcessInfo.processInfo.environment["HOME"].flatMap(Path.init) ?? .home
+
+    static var environmentHome: Path {
+        if let homePathString = ProcessInfo.processInfo.environment["HOME"], let path = Path(homePathString) {
+            return path
+        }
+
+        do {
+            return try Path.home.realpath()
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
+    }
     static let environmentApplicationSupport = environmentHome/"Library/Application Support"
     static let environmentCaches = environmentHome/"Library/Caches"
     public static let environmentDownloads = environmentHome/"Downloads"
