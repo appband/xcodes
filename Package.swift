@@ -23,7 +23,7 @@ let package = Package(
         .package(url: "https://github.com/xcodereleases/data", revision: "fcf527b187817f67c05223676341f3ab69d4214d"),
         .package(url: "https://github.com/onevcat/Rainbow.git", .upToNextMinor(from: "3.2.0")),
         .package(url: "https://github.com/jpsim/Yams", .upToNextMinor(from: "5.4.0")),
-        .package(url: "https://github.com/xcodesOrg/swift-srp", branch: "main")
+        .package(url: "https://github.com/appband/swift-srp", branch: "main")
     ],
     targets: [
         .executableTarget(
