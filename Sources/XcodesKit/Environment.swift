@@ -369,20 +369,16 @@ public struct Logging {
 }
 
 public struct Keychain {
-    private static let keychain = KeychainAccess.Keychain(service: "com.robotsandpencils.xcodes")
 
-    public var getString: (String) throws -> String? = keychain.getString(_:)
     public func getString(_ key: String) throws -> String? {
-        try getString(key)
+        return UserDefaults.standard.string(forKey: key)
     }
 
-    public var set: (String, String) throws -> Void = keychain.set(_:key:)
     public func set(_ value: String, key: String) throws {
-        try set(value, key)
+        return UserDefaults.standard.set(value, forKey: key)
     }
 
-    public var remove: (String) throws -> Void = keychain.remove(_:)
     public func remove(_ key: String) throws -> Void {
-        try remove(key)
+        return UserDefaults.standard.removeObject(forKey: key)
     }
 }
