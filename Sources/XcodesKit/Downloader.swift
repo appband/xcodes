@@ -56,6 +56,7 @@ public enum Downloader {
             let (progress, promise) = Current.network.downloadTask(with: url,
                                                                    to: destination.url,
                                                                    resumingWith: resumeData ?? persistedResumeData)
+            Current.logging.log("progressChanged")
             progressChanged(progress)
             return promise.map { result in
                 /// If the operation is unauthorized, the download page redirects to https://developer.apple.com/unauthorized/
