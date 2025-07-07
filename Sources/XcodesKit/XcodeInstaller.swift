@@ -82,15 +82,15 @@ public final class XcodeInstaller {
     }
 
     /// A numbered step
-    enum InstallationStep: CustomStringConvertible {
-        case downloading(version: String, progress: String?, willInstall: Bool)
+    public enum InstallationStep: CustomStringConvertible {
+        case downloading(version: String, progress: Double?, willInstall: Bool)
         case unarchiving(experimentalUnxip: Bool)
         case moving(destination: String)
         case cleaningArchive(archiveName: String, shouldDelete: Bool)
         case checkingSecurity
         case finishing
 
-        var description: String {
+        public var description: String {
             switch self {
             case .downloading(_, _, let willInstall) where !willInstall:
                 return "(\(stepNumber)/\(InstallationStep.downloadStepCount)) \(message)"
@@ -99,7 +99,7 @@ public final class XcodeInstaller {
             }
         }
 
-        var message: String {
+        public var message: String {
             switch self {
             case .downloading(let version, let progress, _):
                 if let progress = progress {
@@ -130,7 +130,7 @@ public final class XcodeInstaller {
             }
         }
 
-        var stepNumber: Int {
+        public var stepNumber: Int {
             switch self {
             case .downloading:      return 1
             case .unarchiving:      return 2
@@ -141,17 +141,18 @@ public final class XcodeInstaller {
             }
         }
 
-        static var downloadStepCount: Int {
+        public static var downloadStepCount: Int {
             return 1
         }
 
-        static var installStepCount: Int {
+        public static var installStepCount: Int {
             return 6
         }
     }
 
     private var sessionService: AppleSessionService
     private var xcodeList: XcodeList
+    public var installationStepUpdate: ((InstallationStep) -> Void)?
 
     public init(xcodeList: XcodeList, sessionService: AppleSessionService) {
         self.xcodeList = xcodeList
@@ -266,7 +267,13 @@ public final class XcodeInstaller {
                 guard let version = Version(xcodeVersion: versionString) ?? Version.fromXcodeVersionFile() else {
                     throw Error.invalidVersion(versionString)
                 }
-                let xcode = Xcode(version: version, url: path.url, filename: String(path.string.suffix(fromLast: "/")), releaseDate: nil)
+                let xcode = Xcode(
+                    version: version,
+                    url: path.url,
+                    filename: String(path.string.suffix(fromLast: "/")),
+                    releaseDate: nil,
+                    requiredMacOSVersionString: ""
+                )
                 return Promise.value((xcode, path.url))
             case .version(let versionString):
                 guard let version = Version(xcodeVersion: versionString) ?? Version.fromXcodeVersionFile() else {
@@ -335,8 +342,9 @@ public final class XcodeInstaller {
                 Current.logging.log("")
             } else {
                 Current.logging.log("\(InstallationStep.downloading(version: xcode.version.description, progress: nil, willInstall: willInstall))")
+                self.installationStepUpdate?(InstallationStep.downloading(version: xcode.version.description, progress: nil, willInstall: willInstall))
             }
-            let formatter = NumberFormatter(numberStyle: .percent)
+           
             var observation: NSKeyValueObservation?
 
             let promise = self.downloadOrUseExistingArchive(for: xcode, downloader: downloader, willInstall: willInstall, progressChanged: { progress in
@@ -345,7 +353,8 @@ public final class XcodeInstaller {
                     guard Current.shell.isatty() else { return }
 
                     // These escape codes move up a line and then clear to the end
-                    Current.logging.log("\u{1B}[1A\u{1B}[K\(InstallationStep.downloading(version: xcode.version.description, progress: formatter.string(from: progress.fractionCompleted)!, willInstall: willInstall))")
+                    Current.logging.log("\u{1B}[1A\u{1B}[K\(InstallationStep.downloading(version: xcode.version.description, progress: progress.fractionCompleted, willInstall: willInstall))")
+                    self.installationStepUpdate?(InstallationStep.downloading(version: xcode.version.description, progress: progress.fractionCompleted, willInstall: willInstall))
                 }
             })
 
@@ -398,6 +407,7 @@ public final class XcodeInstaller {
         }
         .then { xcode -> Promise<InstalledXcode> in
             Current.logging.log(InstallationStep.cleaningArchive(archiveName: archiveURL.lastPathComponent, shouldDelete: emptyTrash).description)
+            self.installationStepUpdate?(InstallationStep.cleaningArchive(archiveName: archiveURL.lastPathComponent, shouldDelete: emptyTrash))
             if emptyTrash {
                 try Current.files.removeItem(at: archiveURL)
             }
@@ -405,6 +415,7 @@ public final class XcodeInstaller {
                 try Current.files.trashItem(at: archiveURL)
             }
             Current.logging.log(InstallationStep.checkingSecurity.description)
+            self.installationStepUpdate?(InstallationStep.checkingSecurity)
 
             return when(fulfilled: self.verifySecurityAssessment(of: xcode),
                                    self.verifySigningCertificate(of: xcode.path.url))
@@ -413,6 +424,7 @@ public final class XcodeInstaller {
         .then { xcode -> Promise<InstalledXcode> in
             if noSuperuser {
                 Current.logging.log(InstallationStep.finishing.description)
+                self.installationStepUpdate?(InstallationStep.finishing)
                 Current.logging.log("Skipping asking for superuser privileges.")
                 return Promise.value(xcode)
             }
@@ -430,7 +442,7 @@ public final class XcodeInstaller {
         }
         return firstly { () -> Promise<InstalledXcode> in
             Current.logging.log(InstallationStep.finishing.description)
-
+            self.installationStepUpdate?(InstallationStep.finishing)
             return self.enableDeveloperMode(passwordInput: passwordInput).map { xcode }
         }
         .then { xcode -> Promise<InstalledXcode> in
@@ -622,7 +634,7 @@ public final class XcodeInstaller {
     func unarchiveAndMoveXIP(at source: URL, to destination: URL, experimentalUnxip: Bool) -> Promise<URL> {
         return firstly { () -> Promise<Void> in
             Current.logging.log(InstallationStep.unarchiving(experimentalUnxip: experimentalUnxip).description)
-
+            self.installationStepUpdate?(InstallationStep.unarchiving(experimentalUnxip: experimentalUnxip))
             if experimentalUnxip, #available(macOS 11, *) {
                 return Promise { seal in
                     Task.detached {
@@ -651,7 +663,7 @@ public final class XcodeInstaller {
         }
         .map { _ -> URL in
             Current.logging.log(InstallationStep.moving(destination: destination.path).description)
-
+            self.installationStepUpdate?(InstallationStep.moving(destination: destination.path))
             let xcodeURL = source.deletingLastPathComponent().appendingPathComponent("Xcode.app")
             let xcodeBetaURL = source.deletingLastPathComponent().appendingPathComponent("Xcode-beta.app")
             if Current.files.fileExists(atPath: xcodeURL.path) {

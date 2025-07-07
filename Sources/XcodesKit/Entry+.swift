@@ -2,13 +2,13 @@ import Foundation
 import Path
 
 extension Entry {
-    var isAppBundle: Bool {
+    public var isAppBundle: Bool {
         kind == .directory &&
         path.extension == "app" &&
         !path.isSymlink
     }
 
-    var infoPlist: InfoPlist? {
+    public var infoPlist: InfoPlist? {
         let infoPlistPath = path.join("Contents").join("Info.plist")
         guard
             let infoPlistData = try? Data(contentsOf: infoPlistPath.url),

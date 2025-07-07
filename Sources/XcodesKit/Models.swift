@@ -7,7 +7,7 @@ public struct InstalledXcode: Equatable {
     /// Composed of the bundle short version from Info.plist and the product build version from version.plist
     public let version: Version
     
-    init(path: Path, version: Version) {
+    public init(path: Path, version: Version) {
         self.path = path
         self.version = version
     }
@@ -49,16 +49,36 @@ public struct Xcode: Codable, Equatable {
     public let url: URL
     public let filename: String
     public let releaseDate: Date?
+    private let requiredMacOSVersionString: String
 
     public var downloadPath: String {
         return url.path
     }
-    
-    public init(version: Version, url: URL, filename: String, releaseDate: Date?) {
+
+    public var requiredMacOSVersion: OperatingSystemVersion {
+        let split = self.requiredMacOSVersionString.components(separatedBy: ".").compactMap { Int($0) }
+
+        if split.count == 3 {
+            return .init(majorVersion: split[0], minorVersion: split[1], patchVersion: split[2])
+        }
+
+        if split.count == 2 {
+            return .init(majorVersion: split[0], minorVersion: split[1], patchVersion: 0)
+        }
+
+        if split.count == 1 {
+            return .init(majorVersion: split[0], minorVersion: 0, patchVersion: 0)
+        }
+
+        return .init(majorVersion: 0, minorVersion: 0, patchVersion: 0)
+    }
+
+    public init(version: Version, url: URL, filename: String, releaseDate: Date?, requiredMacOSVersionString: String) {
         self.version =  version
         self.url = url
         self.filename = filename
         self.releaseDate = releaseDate
+        self.requiredMacOSVersionString = requiredMacOSVersionString
     }
 }
 

@@ -8,6 +8,7 @@ public class AppleSessionService {
     private let xcodesPassword = "XCODES_PASSWORD"
 
     var configuration: Configuration
+    public var twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
 
     public init(configuration: Configuration) {
         self.configuration = configuration
@@ -29,6 +30,8 @@ public class AppleSessionService {
         }
         else if let password = try? Current.keychain.getString(username){
             return password
+        } else if let password = configuration.defaultPassword {
+            return password
         }
         return nil
     }
@@ -37,34 +40,65 @@ public class AppleSessionService {
         return Current.network.dataTask(with: URLRequest.downloadADCAuth(path: path)).asVoid()
     }
 
-    func loginIfNeeded(withUsername providedUsername: String? = nil, shouldPromptForPassword: Bool = false) -> Promise<Void> {
+    private func requestCredentials(
+        providedUsername: String?,
+        shouldPromptForPassword: Bool,
+        callback: TwoFactorAuthenticationCallback?
+    ) -> Promise<(username: String, password: String)> {
+
+        if let callback = callback {
+            return callback(.requestLoginAndPassword)
+                .map { result in
+                    guard case let .login(login, password: password) = result else { throw Error.missingUsernameOrPassword }
+                    return (login, password)
+                }
+        }
+
+        return Promise { seal in
+            var username = providedUsername ?? self.findUsername()
+            var hasPromptedForUsername = false
+
+            if username == nil {
+                username = Current.shell.readLine(prompt: "Apple ID: ")
+                hasPromptedForUsername = true
+            }
+            guard let user = username else {
+                seal.reject(Error.missingUsernameOrPassword); return
+            }
+
+            let prompt = hasPromptedForUsername
+                ? "Apple ID Password: "
+                : "Apple ID Password (\(user)): "
+
+            var password = self.findPassword(withUsername: user)
+            if password == nil || shouldPromptForPassword {
+                password = Current.shell.readSecureLine(prompt: prompt)
+            }
+            guard let pass = password else {
+                seal.reject(Error.missingUsernameOrPassword); return
+            }
+
+            seal.fulfill((user, pass))
+        }
+    }
+
+
+    func loginIfNeeded(
+        withUsername providedUsername: String? = nil,
+        shouldPromptForPassword: Bool = false
+    ) -> Promise<Void> {
         return firstly { () -> Promise<Void> in
             return Current.network.validateSession()
         }
         // Don't have a valid session, so we'll need to log in
         .recover { error -> Promise<Void> in
-            var possibleUsername = providedUsername ?? self.findUsername()
-            var hasPromptedForUsername = false
-            if possibleUsername == nil {
-                possibleUsername = Current.shell.readLine(prompt: "Apple ID: ")
-                hasPromptedForUsername = true
-            }
-            guard let username = possibleUsername else { throw Error.missingUsernameOrPassword }
-
-            let passwordPrompt: String
-            if hasPromptedForUsername {
-                passwordPrompt = "Apple ID Password: "
-            } else {
-                // If the user wasn't prompted for their username, also explain which Apple ID password they need to enter
-                passwordPrompt = "Apple ID Password (\(username)): "
-            }
-            var possiblePassword = self.findPassword(withUsername: username)
-            if possiblePassword == nil || shouldPromptForPassword {
-                possiblePassword = Current.shell.readSecureLine(prompt: passwordPrompt)
-            }
-            guard let password = possiblePassword else { throw Error.missingUsernameOrPassword }
-
-            return firstly { () -> Promise<Void> in
+            firstly { [unowned self] in
+                return self.requestCredentials(
+                    providedUsername: providedUsername,
+                    shouldPromptForPassword: shouldPromptForPassword,
+                    callback: self.twoFactorAuthenticationCallback
+                )
+            }.then { (username, password) in
                 self.login(username, password: password)
             }
             .recover { error -> Promise<Void> in
@@ -73,7 +107,7 @@ public class AppleSessionService {
                 if case Client.Error.invalidUsernameOrPassword = error {
                     Current.logging.log("Try entering your password again")
                     // Prompt for the password next time to avoid being stuck in a loop of using an incorrect XCODES_PASSWORD environment variable
-                    return self.loginIfNeeded(withUsername: username, shouldPromptForPassword: true)
+                    return self.loginIfNeeded(withUsername: providedUsername, shouldPromptForPassword: true)
                 }
                 else {
                     return Promise(error: error)
@@ -84,7 +118,11 @@ public class AppleSessionService {
 
     func login(_ username: String, password: String) -> Promise<Void> {
         return firstly { () -> Promise<Void> in
-            Current.network.login(accountName: username, password: password)
+            Current.network.login(
+                accountName: username,
+                password: password,
+                twoFactorAuthenticationCallback: self.twoFactorAuthenticationCallback
+            )
         }
         .recover { error -> Promise<Void> in
 

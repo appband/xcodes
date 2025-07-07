@@ -300,9 +300,13 @@ public struct Network {
 
     public var validateSession: () -> Promise<Void> = client.validateSession
 
-    public var login: (String, String) -> Promise<Void> = { client.srpLogin(accountName: $0, password: $1, twoFactorAuthenticationCallback: nil) }
-    public func login(accountName: String, password: String) -> Promise<Void> {
-        login(accountName, password)
+    public var login: (String, String, TwoFactorAuthenticationCallback?) -> Promise<Void> = { client.srpLogin(accountName: $0, password: $1, twoFactorAuthenticationCallback: $2) }
+    public func login(
+        accountName: String,
+        password: String,
+        twoFactorAuthenticationCallback: TwoFactorAuthenticationCallback?
+    ) -> Promise<Void> {
+        login(accountName, password, twoFactorAuthenticationCallback)
     }
 }
 

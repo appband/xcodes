@@ -3,9 +3,11 @@ import Path
 
 public struct Configuration: Codable {
     public var defaultUsername: String?
-
-    public init() {
-        self.defaultUsername = nil
+    public var defaultPassword: String?
+    
+    public init(defaultUsername: String? = nil, defaultPassword: String? = nil) {
+        self.defaultUsername = defaultUsername
+        self.defaultPassword = defaultPassword
     }
 
     public mutating func load() throws {

@@ -100,7 +100,13 @@ extension XcodeList {
                     else { return nil }
 
                     let url = urlPrefix.appendingPathComponent(xcodeFile.remotePath)
-                    return Xcode(version: version, url: url, filename: String(xcodeFile.remotePath.suffix(fromLast: "/")), releaseDate: download.dateModified)
+                    return Xcode(
+                        version: version,
+                        url: url,
+                        filename: String(xcodeFile.remotePath.suffix(fromLast: "/")),
+                        releaseDate: download.dateModified,
+                        requiredMacOSVersionString: ""
+                    )
                 }
             return xcodes
         }
@@ -130,7 +136,15 @@ extension XcodeList {
 
         let filename = String(path.suffix(fromLast: "/"))
 
-        return [Xcode(version: version, url: url, filename: filename, releaseDate: DateFormatter.downloadsReleaseDate.date(from: releaseDateString))]
+        return [
+            Xcode(
+                version: version,
+                url: url,
+                filename: filename,
+                releaseDate: DateFormatter.downloadsReleaseDate.date(from: releaseDateString),
+                requiredMacOSVersionString: ""
+            )
+        ]
     }
 }
 
@@ -155,12 +169,14 @@ extension XcodeList {
                     month: xcReleasesXcode.date.month,
                     day: xcReleasesXcode.date.day
                 ))
-                
+
+
                 return Xcode(
                     version: version,
                     url: downloadURL,
                     filename: String(downloadURL.path.suffix(fromLast: "/")),
-                    releaseDate: releaseDate
+                    releaseDate: releaseDate,
+                    requiredMacOSVersionString: xcReleasesXcode.requires
                 )
             }
             return xcodes

@@ -6,6 +6,46 @@ import SRP
 import Crypto
 import CommonCrypto
 
+public enum TwoFactorAuthentication: Identifiable {
+
+    public struct Phone {
+        public let id: Int
+        public let number: String
+
+        public init(id: Int, number: String) {
+            self.id = id
+            self.number = number
+        }
+    }
+
+    case requestLoginAndPassword
+    case codeFromDevice(codeLength: Int)
+    case codeFromSms(codeLength: Int, phone: Phone)
+    case trustedPhone(phones: [Phone])
+
+    public var id: String {
+        switch self {
+        case .requestLoginAndPassword:
+            return "login-and-password"
+        case .codeFromDevice(codeLength: let codeLength):
+            return "code-from-device-\(codeLength)"
+        case .codeFromSms(codeLength: let codeLength, phone: let phone):
+            return "code-from-sms-\(codeLength)-\(phone.id)"
+        case .trustedPhone(phones: let phones):
+            return "trusted-phone-\(phones.map { String($0.id) }.joined(separator: "-"))"
+        }
+    }
+}
+
+public enum TwoFactorAuthenticationResult {
+    case login(String, password: String)
+    case code(SecurityCode)
+    case sms
+    case selectTrustedPhone(phoneId: Int)
+}
+
+public typealias TwoFactorAuthenticationCallback = (_ twoFactorAuthentication: TwoFactorAuthentication) -> Promise<TwoFactorAuthenticationResult>
+
 public class Client {
     private static let authTypes = ["sa", "hsa", "non-sa", "hsa2"]
 
@@ -63,37 +103,6 @@ public class Client {
                 else { throw Error.invalidSession }
             }
     }
-
-    public enum TwoFactorAuthentication: Identifiable {
-
-        public struct Phone {
-            public let id: Int
-            public let number: String
-        }
-
-        case codeFromDevice(codeLength: Int)
-        case codeFromSms(codeLength: Int, phone: Phone)
-        case trustedPhone(phones: [Phone])
-
-        public var id: String {
-            switch self {
-                case .codeFromDevice(codeLength: let codeLength):
-                return "code-from-device-\(codeLength)"
-            case .codeFromSms(codeLength: let codeLength, phone: let phone):
-                return "code-from-sms-\(codeLength)-\(phone.id)"
-            case .trustedPhone(phones: let phones):
-                return "trusted-phone-\(phones.map { String($0.id) }.joined(separator: "-"))"
-            }
-        }
-    }
-
-    public enum TwoFactorAuthenticationResult {
-        case code(SecurityCode)
-        case sms
-        case selectTrustedPhone(phoneId: Int)
-    }
-
-    public typealias TwoFactorAuthenticationCallback = (_ twoFactorAuthentication: TwoFactorAuthentication) -> Promise<TwoFactorAuthenticationResult>
 
     /// SRPLogin - Secure Remote Password
     /// https://tools.ietf.org/html/rfc2945
@@ -404,7 +413,7 @@ public class Client {
                             )
                             .asVoid()
                             .map { (Data(), URLResponse()) }
-                        case .selectTrustedPhone:
+                        case .selectTrustedPhone, .login:
                             fatalError(
                                 "Should never happen: User was prompted to select a phone number to send an SMS security code to"
                             )
@@ -449,7 +458,7 @@ public class Client {
                             return n.id == phoneId
                         }
                         return .value(number!)
-                    case .code, .sms:
+                    case .code, .sms, .login:
                         fatalError(#function + " should not be called with .code or .sms")
                     }
                 }
@@ -496,7 +505,7 @@ public class Client {
                     switch result {
                     case .code(let code):
                         return code
-                    case .sms, .selectTrustedPhone:
+                    case .sms, .selectTrustedPhone, .login:
                         fatalError("Unexpected .sms, .selectTrustedPhone case")
                     }
                 }
