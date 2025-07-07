@@ -346,7 +346,9 @@ public struct Network {
         dataTask(convertible)
     }
 
-    public var downloadTask: (URLRequestConvertible, URL, Data?) -> (Progress, Promise<(saveLocation: URL, response: URLResponse)>) = { AppleAPI.Current.network.session.downloadTask(with: $0, to: $1, resumingWith: $2) }
+    public var downloadTask: (URLRequestConvertible, URL, Data?) -> (Progress, Promise<(saveLocation: URL, response: URLResponse)>) = {
+        AppleAPI.Current.network.session.downloadTask(with: $0, to: $1, resumingWith: $2)
+    }
 
     public func downloadTask(with convertible: URLRequestConvertible, to saveLocation: URL, resumingWith resumeData: Data?) -> (progress: Progress, promise: Promise<(saveLocation: URL, response: URLResponse)>) {
         return downloadTask(convertible, saveLocation, resumeData)

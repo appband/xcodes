@@ -56,9 +56,11 @@ public enum Downloader {
             let (progress, promise) = Current.network.downloadTask(with: url,
                                                                    to: destination.url,
                                                                    resumingWith: resumeData ?? persistedResumeData)
-            Current.logging.log("progressChanged")
+            Current.logging.log("progressChanged1")
             progressChanged(progress)
+            Current.logging.log("progressChanged2")
             return promise.map { result in
+                Current.logging.log("result \(result.saveLocation.absoluteString)")
                 /// If the operation is unauthorized, the download page redirects to https://developer.apple.com/unauthorized/
                 /// with 200 status. After that the html page is downloaded as a xip and subsequent unxipping fails
                 guard result.response.url?.lastPathComponent != "unauthorized" else {

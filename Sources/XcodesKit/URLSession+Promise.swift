@@ -39,6 +39,7 @@ extension URLSession {
                 task = downloadTask(with: convertible.pmkRequest, completionHandler: completionHandler)
             }
             progress = task.progress
+            Current.logging.log("Resumed download task")
             task.resume()
         }
 
