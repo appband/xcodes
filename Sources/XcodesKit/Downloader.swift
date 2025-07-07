@@ -19,9 +19,9 @@ public enum Downloader {
         switch self {
             case .urlSession:
                 if Current.shell.isatty() {
-                    Current.logging.log("Downloading with urlSession - for faster downloads install aria2 (`brew install aria2`)".black.onYellow)
+//                    Current.logging.log("Downloading with urlSession - for faster downloads install aria2 (`brew install aria2`)".black.onYellow)
                     // Add 1 extra line as we are overwriting with download progress
-                    Current.logging.log("")
+//                    Current.logging.log("")
                 }
                 return withUrlSession(url: url, to: destination, progressChanged: progressChanged)
             case .aria2(let aria2Path):
@@ -51,7 +51,7 @@ public enum Downloader {
     private func withUrlSession(url: URL, to destination: Path, progressChanged: @escaping (Progress) -> Void) -> Promise<URL> {
         let resumeDataPath = destination.parent/(destination.basename() + ".resumedata")
         let persistedResumeData = Current.files.contents(atPath: resumeDataPath.string)
-
+        Current.logging.log("withUrlSession")
         return attemptResumableTask(maximumRetryCount: 3) { resumeData in
             let (progress, promise) = Current.network.downloadTask(with: url,
                                                                    to: destination.url,

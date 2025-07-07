@@ -365,7 +365,39 @@ public struct Network {
 }
 
 public struct Logging {
-    public var log: (String) -> Void = { print($0) }
+
+    private let logFileURL: URL
+
+    public init(logToConsole: Bool = true) {
+        let logsDirectory = FileManager.default
+            .urls(for: .libraryDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("Logs/Xvibe", isDirectory: true)
+
+        if let logsDirectory = logsDirectory {
+            try? FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+            self.logFileURL = logsDirectory.appendingPathComponent("xvibe.log")
+        } else {
+            self.logFileURL = URL(fileURLWithPath: "/tmp/xvibe.log")
+        }
+    }
+
+    public func log(_ message: String) {
+        let timestamp = Self.timestamp()
+        let fullMessage = "[\(timestamp)] \(message)\n"
+
+        if let data = fullMessage.data(using: .utf8) {
+            try? data.append(to: self.logFileURL)
+        }
+
+        print(fullMessage)
+    }
+
+    private static func timestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter.string(from: Date())
+    }
 }
 
 public struct Keychain {
@@ -380,5 +412,24 @@ public struct Keychain {
 
     public func remove(_ key: String) throws -> Void {
         return UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
+private extension Data {
+    func append(to url: URL) throws {
+        if FileManager.default.fileExists(atPath: url.path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+
+            if #available(macOS 10.15.4, *) {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: self)
+            } else {
+               //
+            }
+
+        } else {
+            try write(to: url)
+        }
     }
 }
