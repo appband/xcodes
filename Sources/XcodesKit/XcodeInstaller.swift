@@ -176,7 +176,16 @@ public final class XcodeInstaller {
         }
     }
 
-    private func install(_ installationType: InstallationType, dataSource: DataSource, downloader: Downloader, destination: Path, attemptNumber: Int, experimentalUnxip: Bool, emptyTrash: Bool, noSuperuser: Bool) -> Promise<InstalledXcode> {
+    private func install(
+        _ installationType: InstallationType,
+        dataSource: DataSource,
+        downloader: Downloader,
+        destination: Path,
+        attemptNumber: Int,
+        experimentalUnxip: Bool,
+        emptyTrash: Bool,
+        noSuperuser: Bool
+    ) -> Promise<InstalledXcode> {
         return firstly { () -> Promise<(Xcode, URL)> in
             return self.getXcodeArchive(installationType, dataSource: dataSource, downloader: downloader, destination: destination, willInstall: true)
         }
@@ -185,6 +194,8 @@ public final class XcodeInstaller {
         }
         .recover { error -> Promise<InstalledXcode> in
             switch error {
+            case let Error.versionAlreadyInstalled(installedXcode):
+                return self.postInstallXcode(installedXcode)
             case XcodeInstaller.Error.damagedXIP(let damagedXIPURL):
                 guard attemptNumber < 1 else { throw error }
 
