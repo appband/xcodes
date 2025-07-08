@@ -16,10 +16,13 @@ extension URLSession {
         var progress: Progress!
 
         let promise = Promise<(saveLocation: URL, response: URLResponse)> { seal in
+
             let completionHandler = { (temporaryURL: URL?, response: URLResponse?, error: Error?) in
                 if let error = error {
+                    Current.logging.log("error \(error.localizedDescription)")
                     seal.reject(error)
                 } else if let response = response, let temporaryURL = temporaryURL {
+                    Current.logging.log("response \(response.attributeKeys)")
                     do {
                         try FileManager.default.moveItem(at: temporaryURL, to: saveLocation)
                         seal.fulfill((saveLocation, response))

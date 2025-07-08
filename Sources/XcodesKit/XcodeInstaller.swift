@@ -350,7 +350,7 @@ public final class XcodeInstaller {
             let promise = self.downloadOrUseExistingArchive(for: xcode, downloader: downloader, willInstall: willInstall, progressChanged: { progress in
                 observation?.invalidate()
                 observation = progress.observe(\.fractionCompleted) { progress, _ in
-                    guard Current.shell.isatty() else { return }
+//                    guard Current.shell.isatty() else { return }
 
                     // These escape codes move up a line and then clear to the end
                     Current.logging.log("\u{1B}[1A\u{1B}[K\(InstallationStep.downloading(version: xcode.version.description, progress: progress.fractionCompleted, willInstall: willInstall))")

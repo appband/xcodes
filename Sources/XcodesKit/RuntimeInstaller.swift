@@ -220,7 +220,7 @@ public class RuntimeInstaller {
         let result = try await downloader.download(url: url, to: destination, progressChanged: { progress in
             observation?.invalidate()
             observation = progress.observe(\.fractionCompleted) { progress, _ in
-                guard Current.shell.isatty() else { return }
+//                guard Current.shell.isatty() else { return }
                 // These escape codes move up a line and then clear to the end
                 Current.logging.log("\u{1B}[1A\u{1B}[KDownloading Runtime \(runtime.visibleIdentifier): \(formatter.string(from: progress.fractionCompleted)!)")
             }
@@ -245,7 +245,7 @@ public class RuntimeInstaller {
         // Observe the progress and update the console from it
         for try await progress in downloadStream {
             let formatter = NumberFormatter(numberStyle: .percent)
-            guard Current.shell.isatty() else { return }
+//            guard Current.shell.isatty() else { return }
             // These escape codes move up a line and then clear to the end
             Current.logging.log("\u{1B}[1A\u{1B}[KDownloading Runtime \(runtime.visibleIdentifier): \(formatter.string(from: progress.fractionCompleted)!)")
         }
