@@ -95,6 +95,21 @@ public struct Shell {
     public var touchInstallCheck: (String, String, String) -> Promise<ProcessOutput> = { Process.run(Path.root.usr.bin/"touch", "\($0)com.apple.dt.Xcode.InstallCheckCache_\($1)_\($2)") }
     public var installedRuntimes: () -> Promise<ProcessOutput> = { Process.run(Path.root.usr.bin.join("xcrun"), "simctl", "runtime", "list", "-j") }
 
+    public func postInstallXcode(_ installedXcode: InstalledXcode) -> Promise<ProcessOutput> {
+        let xcodebuildPath = installedXcode.path.join("/Contents/Developer/usr/bin/xcodebuild").string
+
+        let cmd = """
+        do shell script \"DevToolsSecurity -enable; \
+        dseditgroup -o edit -t group -a staff _developer; \
+        \(xcodebuildPath) -license accept; \
+        \(xcodebuildPath) -runFirstLaunch\" with administrator privileges
+        """
+
+//        let cmd = "'do shell script \"DevToolsSecurity -enable; dseditgroup -o edit -t group -a staff _developer; \(xcodebuildPath) -license accept; \(xcodebuildPath) -runFirstLaunch;\" with administrator privileges'"
+
+        return Process.run(Path.root.usr.bin.join("osascript"), "-e", cmd)
+    }
+
     public var validateSudoAuthentication: () -> Promise<ProcessOutput> = { Process.run(Path.root.usr.bin.sudo, "-nv") }
     public var authenticateSudoerIfNecessary: (@escaping () -> Promise<String>) -> Promise<String?> = { passwordInput in
         firstly { () -> Promise<String?> in
