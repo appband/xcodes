@@ -92,14 +92,30 @@ public class RuntimeInstaller {
         Current.logging.log("\nNote: Bundled runtimes are indicated for the currently selected Xcode, more bundled runtimes may exist in other Xcode(s)")
     }
 
-    public func downloadRuntime(identifier: String, to destinationDirectory: Path, with downloader: Downloader) async throws {
+    public func downloadRuntime(
+        identifier: String,
+        to destinationDirectory: Path,
+        with downloader: Downloader,
+        progressCallback: @MainActor @escaping (XcodeProgress) -> Void
+    ) async throws {
         let matchedRuntime = try await getMatchingRuntime(identifier: identifier)
 
-        _ = try await downloadOrUseExistingArchive(runtime: matchedRuntime, to: destinationDirectory, downloader: downloader)
+        _ = try await downloadOrUseExistingArchive(
+            runtime: matchedRuntime,
+            to: destinationDirectory,
+            downloader: downloader,
+            progressCallback: progressCallback
+        )
     }
 
 
-    public func downloadAndInstallRuntime(identifier: String, to destinationDirectory: Path, with downloader: Downloader, shouldDelete: Bool) async throws {
+    public func downloadAndInstallRuntime(
+        identifier: String,
+        to destinationDirectory: Path,
+        with downloader: Downloader,
+        shouldDelete: Bool,
+        progressCallback: @MainActor @escaping (XcodeProgress) -> Void
+    ) async throws {
         let matchedRuntime = try await getMatchingRuntime(identifier: identifier)
 
         let deleteIfNeeded: (URL) -> Void = { dmgUrl in
@@ -114,15 +130,31 @@ public class RuntimeInstaller {
             guard Current.shell.isRoot() else {
                 throw Error.rootNeeded
             }
-            let dmgUrl = try await downloadOrUseExistingArchive(runtime: matchedRuntime, to: destinationDirectory, downloader: downloader)
+            await progressCallback(.preparing)
+            let dmgUrl = try await downloadOrUseExistingArchive(
+                runtime: matchedRuntime,
+                to: destinationDirectory, downloader: downloader,
+                progressCallback: progressCallback
+            )
+            await progressCallback(.installing)
             try await installFromPackage(dmgUrl: dmgUrl, runtime: matchedRuntime)
 			deleteIfNeeded(dmgUrl)
         case .diskImage:
-            let dmgUrl = try await downloadOrUseExistingArchive(runtime: matchedRuntime, to: destinationDirectory, downloader: downloader)
+            await progressCallback(.preparing)
+            let dmgUrl = try await downloadOrUseExistingArchive(
+                runtime: matchedRuntime,
+                to: destinationDirectory,
+                downloader: downloader,
+                progressCallback: progressCallback
+            )
+            await progressCallback(.installing)
             try await installFromImage(dmgUrl: dmgUrl)
 			deleteIfNeeded(dmgUrl)
         case .cryptexDiskImage, .patchableCryptexDiskImage:
-            try await downloadAndInstallUsingXcodeBuild(runtime: matchedRuntime)
+            try await downloadAndInstallUsingXcodeBuild(
+                runtime: matchedRuntime,
+                progressCallback: progressCallback
+            )
         }
     }
 
@@ -189,10 +221,16 @@ public class RuntimeInstaller {
     }
 
     @MainActor
-    public func downloadOrUseExistingArchive(runtime: DownloadableRuntime, to destinationDirectory: Path, downloader: Downloader) async throws -> URL {
+    public func downloadOrUseExistingArchive(
+        runtime: DownloadableRuntime,
+        to destinationDirectory: Path,
+        downloader: Downloader,
+        progressCallback: @MainActor @escaping (XcodeProgress) -> Void
+    ) async throws -> URL {
         guard let source = runtime.source else {
             throw Error.missingRuntimeSource(runtime.visibleIdentifier)
         }
+
         let url = URL(string: source)!
         let destination = destinationDirectory/url.lastPathComponent
         let aria2DownloadMetadataPath = destination.parent/(destination.basename() + ".aria2")
@@ -223,6 +261,9 @@ public class RuntimeInstaller {
 //                guard Current.shell.isatty() else { return }
                 // These escape codes move up a line and then clear to the end
                 Current.logging.log("\u{1B}[1A\u{1B}[KDownloading Runtime \(runtime.visibleIdentifier): \(formatter.string(from: progress.fractionCompleted)!)")
+                Task {
+                    await progressCallback(.progress(progress.fractionCompleted, current: nil, total: nil))
+                }
             }
         }).async()
         observation?.invalidate()
@@ -234,7 +275,10 @@ public class RuntimeInstaller {
     /// Downloads and installs the runtime using xcodebuild, requires Xcode 16.1+ to download a runtime using a given directory
     /// - Parameters:
     ///   - runtime: The runtime to download and install to identify the platform and version numbers
-    private func downloadAndInstallUsingXcodeBuild(runtime: DownloadableRuntime) async throws {
+    private func downloadAndInstallUsingXcodeBuild(
+        runtime: DownloadableRuntime,
+        progressCallback: @MainActor @escaping (XcodeProgress) -> Void
+    ) async throws {
 
         // Make sure that we are using a version of xcode that supports this
         try await ensureSelectedXcodeVersionForDownload()
@@ -244,10 +288,7 @@ public class RuntimeInstaller {
 
         // Observe the progress and update the console from it
         for try await progress in downloadStream {
-            let formatter = NumberFormatter(numberStyle: .percent)
-//            guard Current.shell.isatty() else { return }
-            // These escape codes move up a line and then clear to the end
-            Current.logging.log("\u{1B}[1A\u{1B}[KDownloading Runtime \(runtime.visibleIdentifier): \(formatter.string(from: progress.fractionCompleted)!)")
+            await progressCallback(progress)
         }
     }
 
@@ -274,12 +315,56 @@ public class RuntimeInstaller {
         // If we made it here, we're gucci and 16.1 or greater is selected
     }
 
+    public enum XcodeProgress {
+        case none
+        case searching
+        case preparing
+        case progress(Double, current: String?, total: String?)
+        case installing
+
+        static func fromXcodebuild(text: String) -> XcodeProgress {
+            if text.range(of: "Finding", options: .caseInsensitive) != nil {
+                return .searching
+            }
+
+            if text.range(of: "Preparing", options: .caseInsensitive) != nil {
+                return .preparing
+            }
+
+            do {
+                let downloadPattern = #"(\d+[,\.]\d+)\s*% \(([\d,\.]+ (?:MB|GB)) of ([\d,\.]+ GB)\)"#
+                let downloadRegex = try NSRegularExpression(pattern: downloadPattern, options: .caseInsensitive)
+
+                if let match = downloadRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) {
+                    let nsString = text as NSString
+                    let percentStr = nsString.substring(with: match.range(at: 1)).replacingOccurrences(of: ",", with: ".")
+                    let downloadedStr = nsString.substring(with: match.range(at: 2)).replacingOccurrences(of: ",", with: ".")
+                    let totalStr = nsString.substring(with: match.range(at: 3)).replacingOccurrences(of: ",", with: ".")
+
+                    let percent = Double(percentStr) ?? 0.0
+                    return .progress(percent / 100.0, current: downloadedStr, total: totalStr)
+                }
+
+            } catch {
+                print("Invalid regular expression")
+            }
+
+            // "Downloading tvOS 18.1 Simulator (22J5567a): Installing..." or
+            // "Downloading tvOS 18.1 Simulator (22J5567a): Installing (registering download)..."
+            if text.range(of: "Installing", options: .caseInsensitive) != nil {
+                return .installing
+            }
+
+            return .none
+        }
+    }
+
     // Creates and invokes the xcodebuild install command and converts it to a stream of Progress
-    private func createXcodebuildDownloadStream(runtime: DownloadableRuntime) -> AsyncThrowingStream<Progress, Swift.Error> {
+    private func createXcodebuildDownloadStream(runtime: DownloadableRuntime) -> AsyncThrowingStream<XcodeProgress, Swift.Error> {
         let platform = runtime.platform.shortName
         let version = runtime.simulatorVersion.buildUpdate
 
-        return AsyncThrowingStream<Progress, Swift.Error> { continuation in
+        return AsyncThrowingStream<XcodeProgress, Swift.Error> { continuation in
             Task {
                 // Assume progress will not have data races, so we manually opt-out isolation checks.
                 let progress = Progress()
@@ -316,8 +401,13 @@ public class RuntimeInstaller {
                     defer { handle.waitForDataInBackgroundAndNotify() }
 
                     let string = String(decoding: handle.availableData, as: UTF8.self)
-                    progress.updateFromXcodebuild(text: string)
-                    continuation.yield(progress)
+                    // Finding content...
+                    // Downloading watchOS 11.5 Simulator (22T572):
+                    // Downloading watchOS 11.5 Simulator (22T572): Preparing to download...
+                    // Downloading watchOS 11.5 Simulator (22T572): 82,0 % (3,85 GB of 4,7 GB)
+//                    progress.updateFromXcodebuild(text: string)
+                    let xcodeProgress = XcodeProgress.fromXcodebuild(text: string)
+                    continuation.yield(xcodeProgress)
                 }
 
                 stdOutPipe.fileHandleForReading.waitForDataInBackgroundAndNotify()
@@ -427,6 +517,8 @@ private extension Progress {
         self.totalUnitCount = 100
         self.completedUnitCount = 0
         self.localizedAdditionalDescription = "" // to not show the addtional
+
+
 
         do {
 
