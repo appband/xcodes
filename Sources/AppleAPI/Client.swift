@@ -543,7 +543,8 @@ public class Client {
         .then { _ in
             guard let securityCodeLength = authOptions.securityCode?.length else { throw Error.missingSecurityCodeInfo }
             guard let trustedPhoneNumber = selectedTrustedPhoneNumber else { throw Error.noTrustedPhoneNumbers }
-            return self.promptForSMSSecurityCode(length: securityCodeLength, for: trustedPhoneNumber, twoFactorAuthenticationCallback: nil)
+            return self.promptForSMSSecurityCode(length: securityCodeLength, for: trustedPhoneNumber, twoFactorAuthenticationCallback: twoFactorAuthenticationCallback
+            )
         }
         .then { code in
             Current.network.dataTask(with: try URLRequest.submitSecurityCode(serviceKey: serviceKey, sessionID: sessionID, scnt: scnt, code: code))
